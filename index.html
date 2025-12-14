@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Hand Gesture Cube & Vortex</title>
+<title>Hand Controlled Cube</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
 <style>
@@ -11,9 +11,7 @@
     overflow: hidden;
     background: black;
   }
-  video {
-    display: none;
-  }
+  video { display: none; }
   canvas {
     position: fixed;
     top: 0;
@@ -27,7 +25,7 @@
 <video id="video" autoplay playsinline></video>
 <canvas id="three"></canvas>
 
-<!-- THREE.JS -->
+<!-- THREE -->
 <script src="https://cdn.jsdelivr.net/npm/three@0.155.0/build/three.min.js"></script>
 
 <!-- MEDIAPIPE -->
@@ -35,9 +33,9 @@
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
 
 <script>
-/* =========================
-   THREE.JS SETUP
-========================= */
+/* ======================
+   THREE SETUP
+====================== */
 const scene = new THREE.Scene();
 
 const camera = new THREE.PerspectiveCamera(
@@ -47,81 +45,43 @@ camera.position.z = 5;
 
 const renderer = new THREE.WebGLRenderer({
   canvas: document.getElementById("three"),
-  alpha: true,
   antialias: true
 });
 renderer.setSize(window.innerWidth, window.innerHeight);
 
-/* =========================
+/* ======================
    LIGHT
-========================= */
-const light = new THREE.PointLight(0xffffff, 1);
-light.position.set(5, 5, 5);
+====================== */
+const light = new THREE.DirectionalLight(0xffffff, 1);
+light.position.set(3, 5, 5);
 scene.add(light);
 
-/* =========================
+/* ======================
    CUBE
-========================= */
+====================== */
 const cube = new THREE.Mesh(
   new THREE.BoxGeometry(1.5, 1.5, 1.5),
   new THREE.MeshStandardMaterial({
     color: 0x00ffff,
-    metalness: 0.7,
-    roughness: 0.2
+    metalness: 0.6,
+    roughness: 0.3
   })
 );
 scene.add(cube);
 
-/* =========================
-   VORTEX PARTICLES
-========================= */
-const vortexCount = 1800;
-const vortexGeo = new THREE.BufferGeometry();
-const vortexPos = new Float32Array(vortexCount * 3);
+/* ======================
+   HAND VARIABLES
+====================== */
+let pinchDistance = 0;
+let targetScale = 1;
 
-for (let i = 0; i < vortexPos.length; i += 3) {
-  const angle = Math.random() * Math.PI * 2;
-  const radius = Math.random() * 2;
-  vortexPos[i] = Math.cos(angle) * radius;
-  vortexPos[i + 1] = Math.sin(angle) * radius;
-  vortexPos[i + 2] = (Math.random() - 0.5) * 5;
-}
+// rotation control
+let rotateX = 0;
+let rotateY = 0;
 
-vortexGeo.setAttribute(
-  "position",
-  new THREE.BufferAttribute(vortexPos, 3)
-);
-
-const vortex = new THREE.Points(
-  vortexGeo,
-  new THREE.PointsMaterial({
-    color: 0xff00ff,
-    size: 0.03
-  })
-);
-
-vortex.visible = false;
-scene.add(vortex);
-
-/* =========================
+/* ======================
    HAND TRACKING
-========================= */
-let isPinching = false;
-let pinchX = 0;
-let pinchY = 0;
-let showVortex = false;
-let lastFive = false;
-
-function isFiveFingers(lm) {
-  return (
-    lm[8].y < lm[6].y &&
-    lm[12].y < lm[10].y &&
-    lm[16].y < lm[14].y &&
-    lm[20].y < lm[18].y &&
-    lm[4].x < lm[3].x
-  );
-}
-
+====================== */
 const hands = new Hands({
   locateFile: f =>
     `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`
@@ -139,30 +99,45 @@ hands.onResults(res => {
 
   const lm = res.multiHandLandmarks[0];
 
-  // PINCH
+  /* ===== PINCH ZOOM ===== */
   const thumb = lm[4];
   const index = lm[8];
-  const dist = Math.hypot(
+
+  pinchDistance = Math.hypot(
     thumb.x - index.x,
     thumb.y - index.y
   );
 
-  isPinching = dist < 0.05;
+  // Map pinch distance to scale
+  targetScale = THREE.MathUtils.clamp(
+    pinchDistance * 6,
+    0.5,
+    3
+  );
 
-  pinchX = (index.x - 0.5) * 2;
-  pinchY = -(index.y - 0.5) * 2;
+  /* ===== PALM DIRECTION ===== */
+  const indexTip = lm[8];
+  const pinkyTip = lm[20];
+  const wrist = lm[0];
 
-  // FIVE FINGER TOGGLE
-  const five = isFiveFingers(lm);
-  if (five && !lastFive) {
-    showVortex = !showVortex;
-  }
-  lastFive = five;
+  const dx = indexTip.x - pinkyTip.x;
+  const dy = indexTip.y - wrist.y;
+
+  rotateX = 0;
+  rotateY = 0;
+
+  // LEFT / RIGHT
+  if (dx > 0.15) rotateY = -0.05; // right
+  if (dx < -0.15) rotateY = 0.05; // left
+
+  // UP / DOWN
+  if (dy < -0.15) rotateX = -0.05; // up
+  if (dy > 0.15) rotateX = 0.05;  // down
 });
 
-/* =========================
+/* ======================
    CAMERA FEED
-========================= */
+====================== */
 const video = document.getElementById("video");
 const cam = new Camera(video, {
   onFrame: async () => {
@@ -173,34 +148,29 @@ const cam = new Camera(video, {
 });
 cam.start();
 
-/* =========================
+/* ======================
    ANIMATION LOOP
-========================= */
+====================== */
 function animate() {
   requestAnimationFrame(animate);
 
-  cube.visible = !showVortex;
-  vortex.visible = showVortex;
+  // Smooth zoom
+  cube.scale.lerp(
+    new THREE.Vector3(targetScale, targetScale, targetScale),
+    0.1
+  );
 
-  // PINCH ROTATION
-  if (isPinching && cube.visible) {
-    cube.rotation.y += pinchX * 0.12;
-    cube.rotation.x += pinchY * 0.12;
-  }
-
-  // VORTEX MOTION
-  if (showVortex) {
-    vortex.rotation.z += 0.03;
-    vortex.rotation.y += 0.015;
-  }
+  // Rotation from palm direction
+  cube.rotation.x += rotateX;
+  cube.rotation.y += rotateY;
 
   renderer.render(scene, camera);
 }
 animate();
 
-/* =========================
+/* ======================
    RESIZE
-========================= */
+====================== */
 window.addEventListener("resize", () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
