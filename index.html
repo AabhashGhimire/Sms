@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Hand Controlled Cube</title>
+<title>Hand Controlled Skeleton Cube</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
 <style>
@@ -25,7 +25,7 @@
 <video id="video" autoplay playsinline></video>
 <canvas id="three"></canvas>
 
-<!-- THREE -->
+<!-- THREE.JS -->
 <script src="https://cdn.jsdelivr.net/npm/three@0.155.0/build/three.min.js"></script>
 
 <!-- MEDIAPIPE -->
@@ -52,32 +52,38 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 /* ======================
    LIGHT
 ====================== */
-const light = new THREE.DirectionalLight(0xffffff, 1);
-light.position.set(3, 5, 5);
-scene.add(light);
+scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+
+const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+dirLight.position.set(5, 5, 5);
+scene.add(dirLight);
 
 /* ======================
-   CUBE
+   SKELETON / WIREFRAME CUBE
 ====================== */
-const cube = new THREE.Mesh(
-  new THREE.BoxGeometry(1.5, 1.5, 1.5),
-  new THREE.MeshStandardMaterial({
-    color: 0x00ffff,
-    metalness: 0.6,
-    roughness: 0.3
-  })
-);
+const cubeSize = 1.8;
+
+// base geometry (hidden)
+const cubeGeo = new THREE.BoxGeometry(cubeSize, cubeSize, cubeSize);
+
+// edges (skeleton)
+const edges = new THREE.EdgesGeometry(cubeGeo);
+
+// colored wireframe material
+const edgeMaterial = new THREE.LineBasicMaterial({
+  color: 0x00ffff,
+  linewidth: 2
+});
+
+const cube = new THREE.LineSegments(edges, edgeMaterial);
 scene.add(cube);
 
 /* ======================
-   HAND VARIABLES
+   HAND CONTROL VARS
 ====================== */
-let pinchDistance = 0;
 let targetScale = 1;
-
-// rotation control
-let rotateX = 0;
-let rotateY = 0;
+let rotX = 0;
+let rotY = 0;
 
 /* ======================
    HAND TRACKING
@@ -103,36 +109,43 @@ hands.onResults(res => {
   const thumb = lm[4];
   const index = lm[8];
 
-  pinchDistance = Math.hypot(
+  const pinchDist = Math.hypot(
     thumb.x - index.x,
     thumb.y - index.y
   );
 
-  // Map pinch distance to scale
   targetScale = THREE.MathUtils.clamp(
-    pinchDistance * 6,
-    0.5,
+    pinchDist * 6,
+    0.6,
     3
   );
 
-  /* ===== PALM DIRECTION ===== */
-  const indexTip = lm[8];
-  const pinkyTip = lm[20];
+  /* ===== 4 FINGER DIRECTION ===== */
+  const fingers = [lm[8], lm[12], lm[16], lm[20]];
+  let avgX = 0, avgY = 0;
+
+  fingers.forEach(f => {
+    avgX += f.x;
+    avgY += f.y;
+  });
+
+  avgX /= fingers.length;
+  avgY /= fingers.length;
+
   const wrist = lm[0];
+  const dx = avgX - wrist.x;
+  const dy = avgY - wrist.y;
 
-  const dx = indexTip.x - pinkyTip.x;
-  const dy = indexTip.y - wrist.y;
+  // RESET rotation every frame (NO AUTO ROTATION)
+  rotX = 0;
+  rotY = 0;
 
-  rotateX = 0;
-  rotateY = 0;
+  const threshold = 0.18;
 
-  // LEFT / RIGHT
-  if (dx > 0.15) rotateY = -0.05; // right
-  if (dx < -0.15) rotateY = 0.05; // left
-
-  // UP / DOWN
-  if (dy < -0.15) rotateX = -0.05; // up
-  if (dy > 0.15) rotateX = 0.05;  // down
+  if (dx > threshold) rotY = -0.05;   // right
+  if (dx < -threshold) rotY = 0.05;   // left
+  if (dy < -threshold) rotX = -0.05;  // up
+  if (dy > threshold) rotX = 0.05;    // down
 });
 
 /* ======================
@@ -157,12 +170,12 @@ function animate() {
   // Smooth zoom
   cube.scale.lerp(
     new THREE.Vector3(targetScale, targetScale, targetScale),
-    0.1
+    0.15
   );
 
-  // Rotation from palm direction
-  cube.rotation.x += rotateX;
-  cube.rotation.y += rotateY;
+  // Rotate ONLY on gesture
+  cube.rotation.x += rotX;
+  cube.rotation.y += rotY;
 
   renderer.render(scene, camera);
 }
