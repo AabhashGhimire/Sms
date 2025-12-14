@@ -1,195 +1,285 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<title>Hand Controlled Skeleton Cube</title>
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-
-<style>
-  body {
-    margin: 0;
-    overflow: hidden;
-    background: black;
-  }
-  video { display: none; }
-  canvas {
-    position: fixed;
-    top: 0;
-    left: 0;
-  }
-</style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Hand-Controlled Cube</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #111; }
+        #scene-container {
+            width: 100vw;
+            height: calc(100vh - 200px); /* 200px for the camera view below */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background-color: #000;
+        }
+        #camera-feed-container {
+            position: fixed;
+            bottom: 0;
+            width: 100vw;
+            height: 200px; /* Fixed height for the camera feed section */
+            background-color: #222;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow: hidden;
+            box-shadow: 0 -5px 10px rgba(0, 0, 0, 0.5);
+        }
+        #video-stream {
+            /* Make video fill the container without distortion and crop if necessary */
+            height: 100%;
+            object-fit: cover;
+            /* Hide it initially, MediaPipe will draw on canvas */
+            display: none;
+        }
+        #output-canvas {
+            height: 100%;
+            /* Mirror the canvas for a natural feel */
+            transform: scaleX(-1);
+        }
+        #instructions {
+            position: fixed;
+            top: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 10px 20px;
+            border-radius: 5px;
+            font-family: sans-serif;
+            z-index: 10;
+        }
+        #status {
+            position: fixed;
+            bottom: 210px;
+            left: 10px;
+            background: rgba(255, 255, 255, 0.8);
+            padding: 5px 10px;
+            border-radius: 3px;
+            font-family: sans-serif;
+            font-size: 0.9em;
+        }
+    </style>
 </head>
-
 <body>
 
-<video id="video" autoplay playsinline></video>
-<canvas id="three"></canvas>
+    <div id="instructions">
+        🖐️ **Control the Cube:** Open hand to **Rotate**. Closed fist to **Zoom In/Out**.
+    </div>
+    <div id="status">
+        Status: Initializing...
+    </div>
 
-<!-- THREE.JS -->
-<script src="https://cdn.jsdelivr.net/npm/three@0.155.0/build/three.min.js"></script>
+    <div id="scene-container">
+        </div>
 
-<!-- MEDIAPIPE -->
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+    <div id="camera-feed-container">
+        <video id="video-stream" autoplay playsinline></video>
+        <canvas id="output-canvas"></canvas>
+    </div>
 
-<script>
-/* ======================
-   THREE SETUP
-====================== */
-const scene = new THREE.Scene();
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675466986/hands.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3.1675466862/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils@0.3.1675466862/drawing_utils.js" crossorigin="anonymous"></script>
 
-const camera = new THREE.PerspectiveCamera(
-  75, window.innerWidth / window.innerHeight, 0.1, 1000
-);
-camera.position.z = 5;
+    <script>
+        // --- 3D Scene Setup (Three.js) ---
+        const sceneContainer = document.getElementById('scene-container');
+        const statusElement = document.getElementById('status');
+        let scene, camera, renderer, cube;
+        let rotationX = 0, rotationY = 0;
+        let cameraZ = 5;
 
-const renderer = new THREE.WebGLRenderer({
-  canvas: document.getElementById("three"),
-  antialias: true
-});
-renderer.setSize(window.innerWidth, window.innerHeight);
+        function init3D() {
+            // 1. Scene
+            scene = new THREE.Scene();
 
-/* ======================
-   LIGHT
-====================== */
-scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+            // 2. Camera
+            camera = new THREE.PerspectiveCamera(75, sceneContainer.clientWidth / sceneContainer.clientHeight, 0.1, 1000);
+            camera.position.z = cameraZ;
 
-const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
-dirLight.position.set(5, 5, 5);
-scene.add(dirLight);
+            // 3. Renderer
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(sceneContainer.clientWidth, sceneContainer.clientHeight);
+            renderer.setClearColor(0x111111); // Dark background
+            sceneContainer.appendChild(renderer.domElement);
 
-/* ======================
-   SKELETON / WIREFRAME CUBE
-====================== */
-const cubeSize = 1.8;
+            // 4. Cube (Geometry, Material, Mesh)
+            const geometry = new THREE.BoxGeometry(1, 1, 1);
+            const material = new THREE.MeshPhongMaterial({ color: 0x00ff00 }); // Green color
+            cube = new THREE.Mesh(geometry, material);
+            scene.add(cube);
 
-// base geometry (hidden)
-const cubeGeo = new THREE.BoxGeometry(cubeSize, cubeSize, cubeSize);
+            // 5. Lighting (Essential for MeshPhongMaterial)
+            const ambientLight = new THREE.AmbientLight(0x404040); // Soft white light
+            scene.add(ambientLight);
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 1.0);
+            directionalLight.position.set(5, 5, 5).normalize();
+            scene.add(directionalLight);
 
-// edges (skeleton)
-const edges = new THREE.EdgesGeometry(cubeGeo);
+            // 6. Handle window resize
+            window.addEventListener('resize', onWindowResize, false);
 
-// colored wireframe material
-const edgeMaterial = new THREE.LineBasicMaterial({
-  color: 0x00ffff,
-  linewidth: 2
-});
+            function onWindowResize() {
+                camera.aspect = sceneContainer.clientWidth / sceneContainer.clientHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(sceneContainer.clientWidth, sceneContainer.clientHeight);
+            }
+        }
 
-const cube = new THREE.LineSegments(edges, edgeMaterial);
-scene.add(cube);
+        // Animation loop
+        function animate() {
+            requestAnimationFrame(animate);
 
-/* ======================
-   HAND CONTROL VARS
-====================== */
-let targetScale = 1;
-let rotX = 0;
-let rotY = 0;
+            // Apply current rotation values
+            cube.rotation.x = rotationX;
+            cube.rotation.y = rotationY;
 
-/* ======================
-   HAND TRACKING
-====================== */
-const hands = new Hands({
-  locateFile: f =>
-    `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`
-});
+            // Apply current camera zoom value
+            camera.position.z = cameraZ;
+            camera.updateProjectionMatrix();
 
-hands.setOptions({
-  maxNumHands: 1,
-  modelComplexity: 1,
-  minDetectionConfidence: 0.7,
-  minTrackingConfidence: 0.7
-});
+            renderer.render(scene, camera);
+        }
 
-hands.onResults(res => {
-  if (!res.multiHandLandmarks.length) return;
+        // --- Hand Tracking Setup (MediaPipe) ---
+        const videoElement = document.getElementById('video-stream');
+        const canvasElement = document.getElementById('output-canvas');
+        const canvasCtx = canvasElement.getContext('2d');
+        let isHandDetected = false;
 
-  const lm = res.multiHandLandmarks[0];
+        const hands = new Hands({locateFile: (file) => {
+            return `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675466986/${file}`;
+        }});
 
-  /* ===== PINCH ZOOM ===== */
-  const thumb = lm[4];
-  const index = lm[8];
+        hands.setOptions({
+            maxNumHands: 1,
+            modelComplexity: 1,
+            minDetectionConfidence: 0.7,
+            minTrackingConfidence: 0.5
+        });
 
-  const pinchDist = Math.hypot(
-    thumb.x - index.x,
-    thumb.y - index.y
-  );
+        hands.onResults(onResults);
 
-  targetScale = THREE.MathUtils.clamp(
-    pinchDist * 6,
-    0.6,
-    3
-  );
+        // Function to check hand gesture
+        function getGesture(landmarks) {
+            if (!landmarks || landmarks.length === 0) return 'NONE';
 
-  /* ===== 4 FINGER DIRECTION ===== */
-  const fingers = [lm[8], lm[12], lm[16], lm[20]];
-  let avgX = 0, avgY = 0;
+            // Check if hand is open (Fingers are extended)
+            // Tip landmark indices: Thumb=4, Index=8, Middle=12, Ring=16, Pinky=20
 
-  fingers.forEach(f => {
-    avgX += f.x;
-    avgY += f.y;
-  });
+            // Helper function to check if a finger is extended (tip higher than its PIPS/MCP joint)
+            // For general stability, we check the tip against the base of the finger (MCP)
+            const isExtended = (tip, mcp) => landmarks[tip].y < landmarks[mcp].y;
 
-  avgX /= fingers.length;
-  avgY /= fingers.length;
+            // Check if all four main fingers (index to pinky) are extended
+            const isIndexExtended = isExtended(8, 5);
+            const isMiddleExtended = isExtended(12, 9);
+            const isRingExtended = isExtended(16, 13);
+            const isPinkyExtended = isExtended(20, 17);
 
-  const wrist = lm[0];
-  const dx = avgX - wrist.x;
-  const dy = avgY - wrist.y;
+            const allFingersExtended = isIndexExtended && isMiddleExtended && isRingExtended && isPinkyExtended;
 
-  // RESET rotation every frame (NO AUTO ROTATION)
-  rotX = 0;
-  rotY = 0;
+            // Check the thumb (different check for robustness)
+            // Thumb is considered extended if the tip (4) is further left/right than the base (2)
+            const isThumbExtended = Math.abs(landmarks[4].x - landmarks[2].x) > 0.05;
 
-  const threshold = 0.18;
+            // Gesture logic
+            if (allFingersExtended && isThumbExtended) {
+                return 'OPEN_HAND'; // Used for rotation
+            } else if (!isIndexExtended && !isMiddleExtended && !isRingExtended && !isPinkyExtended) {
+                return 'FIST'; // Used for zooming
+            }
 
-  if (dx > threshold) rotY = -0.05;   // right
-  if (dx < -threshold) rotY = 0.05;   // left
-  if (dy < -threshold) rotX = -0.05;  // up
-  if (dy > threshold) rotX = 0.05;    // down
-});
+            return 'UNKNOWN';
+        }
 
-/* ======================
-   CAMERA FEED
-====================== */
-const video = document.getElementById("video");
-const cam = new Camera(video, {
-  onFrame: async () => {
-    await hands.send({ image: video });
-  },
-  width: 640,
-  height: 480
-});
-cam.start();
+        // Main results handler for MediaPipe
+        function onResults(results) {
+            isHandDetected = results.multiHandLandmarks.length > 0;
+            const gesture = isHandDetected ? getGesture(results.multiHandLandmarks[0]) : 'NONE';
+            statusElement.textContent = `Status: ${isHandDetected ? 'Hand Detected' : 'No Hand'} | Gesture: ${gesture}`;
 
-/* ======================
-   ANIMATION LOOP
-====================== */
-function animate() {
-  requestAnimationFrame(animate);
+            // Draw the camera feed and landmarks (the "section in down of camera")
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            // Flip the image horizontally for a mirror effect
+            canvasCtx.scale(-1, 1);
+            canvasCtx.translate(-canvasElement.width, 0);
+            canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
 
-  // Smooth zoom
-  cube.scale.lerp(
-    new THREE.Vector3(targetScale, targetScale, targetScale),
-    0.15
-  );
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                for (const landmarks of results.multiHandLandmarks) {
+                    // Draw connections (skeleton)
+                    drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, {color: '#00FF00', lineWidth: 5});
+                    // Draw individual landmarks
+                    drawLandmarks(canvasCtx, landmarks, {color: '#FF0000', lineWidth: 2});
 
-  // Rotate ONLY on gesture
-  cube.rotation.x += rotX;
-  cube.rotation.y += rotY;
+                    // --- Control Logic ---
+                    if (gesture === 'OPEN_HAND') {
+                        // Use the wrist (landmark 0) to control rotation
+                        // x-coordinate (0 to 1) maps to Y rotation
+                        // y-coordinate (0 to 1) maps to X rotation
+                        const wristX = landmarks[0].x; // 0=left, 1=right
+                        const wristY = landmarks[0].y; // 0=top, 1=bottom
 
-  renderer.render(scene, camera);
-}
-animate();
+                        // Map wrist position to rotation angle (e.g., -PI/2 to +PI/2)
+                        // Note: The camera feed is mirrored (x=1 is left side of screen)
+                        rotationY = (1 - wristX) * Math.PI - (Math.PI / 2); // Rotate Y
+                        rotationX = wristY * Math.PI - (Math.PI / 2); // Rotate X
 
-/* ======================
-   RESIZE
-====================== */
-window.addEventListener("resize", () => {
-  camera.aspect = window.innerWidth / window.innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
-});
-</script>
+                    } else if (gesture === 'FIST') {
+                        // Use the distance between two points (e.g., wrist 0 and middle finger tip 12) for zoom
+                        const wrist = landmarks[0];
+                        const middleTip = landmarks[12];
+
+                        // Simple Euclidean distance (scaled down)
+                        const dist = Math.sqrt(
+                            Math.pow(wrist.x - middleTip.x, 2) + Math.pow(wrist.y - middleTip.y, 2)
+                        );
+
+                        // Map the distance to camera Z position (zoom)
+                        // dist is usually 0.1 to 0.4. We map this to cameraZ (e.g., 2 to 8)
+                        cameraZ = THREE.MathUtils.lerp(8, 2, dist * 2.5); // *2.5 is a scaling factor
+
+                        // Clamp the zoom value to prevent issues
+                        cameraZ = Math.min(Math.max(cameraZ, 2), 8);
+                    }
+                }
+            }
+
+            canvasCtx.restore();
+        }
+
+        // --- Camera Stream Initialization ---
+        const camera = new Camera(videoElement, {
+            onFrame: async () => {
+                await hands.send({image: videoElement});
+            },
+            width: 480, // Set size for performance
+            height: 270
+        });
+
+        // Start the process
+        init3D();
+        animate(); // Start the Three.js loop
+
+        // Wait for MediaPipe to be ready before starting the camera
+        hands.initialize().then(() => {
+            camera.start().then(() => {
+                 // Set canvas dimensions to match video dimensions
+                canvasElement.width = videoElement.videoWidth;
+                canvasElement.height = videoElement.videoHeight;
+                statusElement.textContent = `Status: Ready. Looking for hand.`;
+            }).catch(e => {
+                statusElement.textContent = `Status: ERROR - Could not access camera. (${e.name})`;
+                console.error("Camera access error:", e);
+            });
+        });
+
+    </script>
 
 </body>
 </html>
