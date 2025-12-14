@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Hand Controlled Colored Cube</title>
+<title>Pinch Drag Cube Control</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
 <style>
@@ -56,13 +56,12 @@ renderer.setSize(window.innerWidth, window.innerHeight);
    LIGHT
 ====================== */
 scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-
 const light = new THREE.DirectionalLight(0xffffff, 1);
 light.position.set(5, 5, 5);
 scene.add(light);
 
 /* ======================
-   CUBE (6 DIFFERENT COLORS)
+   CUBE (6 COLORS)
 ====================== */
 const materials = [
   new THREE.MeshStandardMaterial({ color: 0xff0000 }), // right
@@ -82,9 +81,10 @@ scene.add(cube);
 /* ======================
    HAND CONTROL VARS
 ====================== */
-let targetScale = 1;
-let rotX = 0;
-let rotY = 0;
+let isPinching = false;
+let pinchStartX = 0;
+let pinchStartY = 0;
+let pinchActive = false;
 
 /* ======================
    HAND TRACKING
@@ -102,11 +102,14 @@ hands.setOptions({
 });
 
 hands.onResults(res => {
-  if (!res.multiHandLandmarks.length) return;
+  if (!res.multiHandLandmarks.length) {
+    isPinching = false;
+    pinchActive = false;
+    return;
+  }
 
   const lm = res.multiHandLandmarks[0];
 
-  /* ===== PINCH ZOOM ===== */
   const thumb = lm[4];
   const index = lm[8];
 
@@ -115,29 +118,33 @@ hands.onResults(res => {
     thumb.y - index.y
   );
 
-  targetScale = THREE.MathUtils.clamp(
-    pinchDist * 6,
-    0.6,
-    3
-  );
+  // PINCH DETECTION
+  isPinching = pinchDist < 0.05;
 
-  /* ===== PALM TILT ROTATION ===== */
-  const wrist = lm[0];
-  const middleBase = lm[9]; // palm reference
+  // Start pinch
+  if (isPinching && !pinchActive) {
+    pinchStartX = index.x;
+    pinchStartY = index.y;
+    pinchActive = true;
+  }
 
-  const dx = middleBase.x - wrist.x;
-  const dy = middleBase.y - wrist.y;
+  // End pinch
+  if (!isPinching) {
+    pinchActive = false;
+  }
 
-  // RESET every frame (NO AUTO ROTATION)
-  rotX = 0;
-  rotY = 0;
+  // ROTATION ONLY WHILE PINCHING
+  if (pinchActive) {
+    const dx = index.x - pinchStartX;
+    const dy = index.y - pinchStartY;
 
-  const threshold = 0.08;
+    cube.rotation.y += dx * 5;  // left / right
+    cube.rotation.x += dy * 5;  // up / down
 
-  if (dx > threshold) rotY = -0.06;   // tilt right
-  if (dx < -threshold) rotY = 0.06;   // tilt left
-  if (dy < -threshold) rotX = -0.06;  // tilt up
-  if (dy > threshold) rotX = 0.06;    // tilt down
+    // reset reference for smooth dragging
+    pinchStartX = index.x;
+    pinchStartY = index.y;
+  }
 });
 
 /* ======================
@@ -158,17 +165,6 @@ cam.start();
 ====================== */
 function animate() {
   requestAnimationFrame(animate);
-
-  // Smooth zoom
-  cube.scale.lerp(
-    new THREE.Vector3(targetScale, targetScale, targetScale),
-    0.15
-  );
-
-  // Rotate ONLY when palm tilts
-  cube.rotation.x += rotX;
-  cube.rotation.y += rotY;
-
   renderer.render(scene, camera);
 }
 animate();
